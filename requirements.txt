@@ -1,0 +1,13 @@
+torch
+torchaudio
+faster-whisper
+numpy
+scipy
+soundfile
+pydub
+tqdm
+ffmpeg-python
+deep-translator
+nltk
+spacy
+requests>=2.31.0
