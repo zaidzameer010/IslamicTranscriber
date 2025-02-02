@@ -2,9 +2,9 @@ import torch
 import os
 from tqdm import tqdm
 from faster_whisper import WhisperModel
-from pyannote.audio import Pipeline
 from pydub import AudioSegment
 import warnings
+from dataclasses import dataclass
 warnings.filterwarnings("ignore")
 
 # Set CUDA memory allocation configuration
@@ -81,6 +81,12 @@ ARABIC_CHARS = {
     'أ', 'إ', 'ؤ', 'ئ',
 }.union(ARABIC_DIACRITICS)  # Add all diacritical marks to Arabic character set
 
+@dataclass
+class TranscriptionSegment:
+    start: float
+    end: float
+    text: str
+
 class AudioPreprocessor:
     """Audio preprocessing class for noise reduction and enhancement"""
 
@@ -130,22 +136,6 @@ class AudioPreprocessor:
         except Exception as e:
             print(f"Error processing audio: {str(e)}")
             return input_file
-
-class SpeakerDiarization:
-    """Handle speaker diarization using pyannote.audio"""
-
-    def __init__(self, auth_token):
-        self.pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization",
-            use_auth_token=auth_token
-        )
-        if torch.cuda.is_available():
-            self.pipeline = self.pipeline.to(torch.device("cuda"))
-
-    def process(self, audio_path):
-        """Process audio file and return speaker diarization information"""
-        diarization = self.pipeline(audio_path)
-        return diarization
 
 def format_timestamp(seconds):
     """Convert seconds to SRT timestamp format"""
@@ -202,13 +192,6 @@ def get_compute_type(device):
             return "float16"  # Use FP16 for modern GPUs
         return "int8"  # Use INT8 for older GPUs
     return "int8"  # Default to INT8 for CPU
-
-def get_speaker_for_segment(diarization, start, end):
-    """Get the speaker label for a given segment"""
-    for turn, _, speaker in diarization.itertracks(yield_label=True):
-        if (turn.start <= start <= turn.end) or (turn.start <= end <= turn.end):
-            return speaker
-    return None
 
 def is_arabic_text(text):
     """Check if text contains Arabic characters but not Urdu-specific characters"""
@@ -553,7 +536,7 @@ def translate_srt_file(input_srt, output_srt, model, language):
 
     except Exception as e:
         print(f"Error during translation: {str(e)}")
-        raise e
+        raise
 
 def load_whisper_model(model_name="large-v3"):
     """
@@ -584,6 +567,115 @@ def load_whisper_model(model_name="large-v3"):
         print(f"Error loading Whisper model: {str(e)}")
         raise
 
+def detect_language(model, audio_path):
+    """Detects the language of the provided audio file using the Whisper model."""
+    try:
+        # Run transcription with minimal settings to retrieve language info
+        _, info = model.transcribe(
+            audio_path,
+            language=None,
+            initial_prompt="",
+            beam_size=1,
+            temperature=0.0,
+            condition_on_previous_text=False,
+            word_timestamps=False
+        )
+        if info and hasattr(info, "language"):
+            return info.language
+        return "en"
+    except Exception as e:
+        print("Error detecting language:", e)
+        return "en"
+
+def build_custom_vocabulary(text):
+    """Build a custom vocabulary from previously transcribed text to improve accuracy."""
+    try:
+        import nltk
+        from nltk.corpus import stopwords
+        from nltk.tokenize import word_tokenize
+        
+        # Initialize NLTK resources
+        nltk.download('stopwords', quiet=True)
+        nltk.download('punkt', quiet=True)
+        nltk.download('averaged_perceptron_tagger', quiet=True)
+        
+        # Tokenize and get parts of speech
+        tokens = word_tokenize(text)
+        pos_tags = nltk.pos_tag(tokens)
+        
+        # Extract likely domain-specific terms (nouns and proper nouns)
+        stop_words = set(stopwords.words('english'))
+        custom_terms = set()
+        
+        for word, pos in pos_tags:
+            # Focus on nouns (NN*) and unknown words (FW)
+            if (pos.startswith('NN') or pos == 'FW') and word.lower() not in stop_words:
+                custom_terms.add(word)
+        
+        return list(custom_terms)
+    except Exception as e:
+        print(f"Error building custom vocabulary: {str(e)}")
+        return []
+
+def apply_context_correction(segments, custom_vocab=None):
+    """Apply context-aware corrections to transcribed segments."""
+    try:
+        import nltk
+        from nltk.tokenize import sent_tokenize
+        from nltk.corpus import wordnet
+        nltk.download('wordnet', quiet=True)
+        
+        corrected_segments = []
+        context_window = []  # Keep track of recent segments for context
+        
+        for segment in segments:
+            # Get the text from the segment
+            text = segment.text.strip()
+            
+            # Apply custom vocabulary corrections
+            if custom_vocab:
+                for term in custom_vocab:
+                    # Use string similarity to catch near-matches
+                    words = text.split()
+                    for i, word in enumerate(words):
+                        if (word.lower() != term.lower() and 
+                            nltk.edit_distance(word.lower(), term.lower()) <= 2):
+                            words[i] = term
+                    text = ' '.join(words)
+            
+            # Apply context-based corrections
+            sentences = sent_tokenize(text)
+            corrected_sentences = []
+            
+            for sentence in sentences:
+                # Check for semantic consistency with recent context
+                if context_window:
+                    # Simple context check - ensure proper sentence connections
+                    if not sentence[0].isupper():
+                        sentence = sentence[0].upper() + sentence[1:]
+                    
+                    # Ensure proper punctuation between context
+                    if not context_window[-1].endswith(('.', '!', '?')):
+                        context_window[-1] += '.'
+                
+                corrected_sentences.append(sentence)
+                context_window.append(sentence)
+                if len(context_window) > 3:  # Keep last 3 sentences for context
+                    context_window.pop(0)
+            
+            # Create new segment with corrected text
+            corrected_text = ' '.join(corrected_sentences)
+            corrected_segments.append(type(segment)(
+                start=segment.start,
+                end=segment.end,
+                text=corrected_text
+            ))
+        
+        return corrected_segments
+    except Exception as e:
+        print(f"Error in context correction: {str(e)}")
+        return segments
+
 def transcribe_with_whisper(model, audio_path, language=None):
     """
     Transcribe audio with optimized Whisper settings using sentence-level processing
@@ -594,6 +686,7 @@ def transcribe_with_whisper(model, audio_path, language=None):
             "The following is a high-quality transcription with proper punctuation and capitalization. "
             "Each sentence is complete and grammatically correct. "
             "Numbers and proper nouns are accurately transcribed. "
+            "Technical terms and domain-specific vocabulary are preserved."
         )
 
         # Optimize transcription settings for sentence-level processing
@@ -601,24 +694,31 @@ def transcribe_with_whisper(model, audio_path, language=None):
             audio_path,
             language=language,
             initial_prompt=initial_prompt,
-            beam_size=10,  # Increased beam size for better accuracy
+            beam_size=15,  # Increased for better accuracy
             temperature=0.0,  # Reduce randomness
-            condition_on_previous_text=False,  # Independent sentence processing
-            word_timestamps=False,  # Disable word-level timestamps for better sentence processing
+            condition_on_previous_text=True,  # Enable context awareness
+            word_timestamps=True,  # Enable for better alignment
             vad_filter=True,  # Enable VAD for better sentence segmentation
             vad_parameters=dict(
-                min_silence_duration_ms=500,  # Balanced silence detection
-                speech_pad_ms=300,           # Reduced padding for cleaner breaks
-                threshold=0.45,              # Slightly higher threshold for better voice detection
+                min_silence_duration_ms=500,
+                speech_pad_ms=300,
+                threshold=0.45,
             ),
             # Advanced parameters for better quality
-            compression_ratio_threshold=2.0,  # Filter out hallucinated speech
-            log_prob_threshold=-0.7,         # Stricter confidence threshold
-            no_speech_threshold=0.5,         # Better silence detection
+            compression_ratio_threshold=2.0,
+            log_prob_threshold=-0.7,
+            no_speech_threshold=0.5,
         )
 
-        # Convert generator to list to ensure complete transcription
+        # Convert generator to list
         segments_list = list(segments)
+
+        # Build custom vocabulary from initial transcription
+        all_text = " ".join(segment.text for segment in segments_list)
+        custom_vocab = build_custom_vocabulary(all_text)
+
+        # Apply context-aware corrections
+        corrected_segments = apply_context_correction(segments_list, custom_vocab)
 
         # Print detected language info
         if info and hasattr(info, 'language'):
@@ -626,7 +726,7 @@ def transcribe_with_whisper(model, audio_path, language=None):
             if hasattr(info, 'language_probability'):
                 print(f"Language probability: {info.language_probability:.2f}")
 
-        return segments_list
+        return corrected_segments
     except Exception as e:
         print(f"Error during transcription: {str(e)}")
         raise
@@ -663,8 +763,7 @@ def write_srt(segments, output_path):
         print(f"Error writing SRT file: {str(e)}")
         raise
 
-def transcribe_audio(audio_path, output_path=None, model_name="large-v3", language=None,
-                    enable_diarization=False, hf_token=None, translate_to_english=False):
+def transcribe_audio(audio_path, output_path=None, model_name="large-v3", language=None, translate_to_english=False):
     try:
         print("Preprocessing audio...")
         preprocessor = AudioPreprocessor()
@@ -674,17 +773,6 @@ def transcribe_audio(audio_path, output_path=None, model_name="large-v3", langua
 
         # Process audio
         processed_path = preprocessor.process_audio(wav_path)
-
-        # Initialize speaker diarization if enabled
-        diarization = None
-        if enable_diarization:
-            if not hf_token:
-                print("Warning: HuggingFace token not provided. Speaker diarization may not work.")
-            try:
-                diarization = SpeakerDiarization(hf_token)
-            except Exception as e:
-                print(f"Warning: Failed to initialize speaker diarization: {str(e)}")
-                enable_diarization = False
 
         # Load optimized Whisper model
         print("\nLoading Whisper model...")
@@ -699,16 +787,6 @@ def transcribe_audio(audio_path, output_path=None, model_name="large-v3", langua
         # Transcribe with optimized settings
         print("\nTranscribing audio...")
         segments = transcribe_with_whisper(model, processed_path, language)
-
-        # Apply speaker diarization if enabled
-        if enable_diarization and diarization:
-            print("\nApplying speaker diarization...")
-            segments = diarization.process_audio(processed_path, segments)
-
-        # Generate output path if not specified
-        if output_path is None:
-            base_path = os.path.splitext(audio_path)[0]
-            output_path = f"{base_path}_transcript.srt"
 
         # Write SRT file
         print("\nWriting transcript to SRT file...")
@@ -807,6 +885,52 @@ def save_srt(segments_list, output_path, diarization=None):
         print(f"Error saving SRT file: {str(e)}")
         raise
 
+def contextual_error_correction(text):
+    """
+    Perform a second pass on the text to correct ambiguous phrases and common transcription errors.
+    """
+    try:
+        # Basic normalization and punctuation fix
+        corrected = " ".join(text.split())
+        if corrected and corrected[0].islower():
+            corrected = corrected[0].upper() + corrected[1:]
+        if corrected and corrected[-1] not in '.!?':
+            corrected += '.'
+        return corrected
+    except Exception as e:
+        print("Error in contextual_error_correction:", e)
+        return text
+
+def segment_audio_file(audio_file_path, min_silence_len=500, silence_thresh=-40, keep_silence=200):
+    """
+    Segment the audio file into manageable parts using silence detection.
+    Returns a list of dictionaries with 'start' (in seconds), 'end' (in seconds) and 'audio_segment' (AudioSegment object).
+    """
+    try:
+        from pydub import AudioSegment, silence
+        audio = AudioSegment.from_file(audio_file_path)
+        silence_ranges = silence.detect_silence(audio, min_silence_len=min_silence_len, silence_thresh=silence_thresh, seek_step=1)
+        segments = []
+        if not silence_ranges:
+            segments.append({'start': 0, 'end': len(audio) / 1000.0, 'audio_segment': audio})
+        else:
+            if silence_ranges[0][0] > 0:
+                seg = audio[0:silence_ranges[0][0]]
+                segments.append({'start': 0, 'end': silence_ranges[0][0] / 1000.0, 'audio_segment': seg})
+            for i in range(len(silence_ranges) - 1):
+                start = silence_ranges[i][1]
+                end = silence_ranges[i+1][0]
+                seg = audio[start:end]
+                segments.append({'start': start / 1000.0, 'end': end / 1000.0, 'audio_segment': seg})
+            last_end = silence_ranges[-1][1]
+            if last_end < len(audio):
+                seg = audio[last_end:]
+                segments.append({'start': last_end / 1000.0, 'end': len(audio) / 1000.0, 'audio_segment': seg})
+        return segments
+    except Exception as e:
+        print("Error during audio segmentation:", e)
+        return []
+
 if __name__ == "__main__":
     print("Advanced Audio Transcriber with Whisper v3")
     print("-----------------------------------------")
@@ -852,14 +976,6 @@ if __name__ == "__main__":
     # Get translation preference
     translate = input("\nTranslate to English (preserving Arabic text)? (y/n, default: n): ").lower().strip() == 'y'
 
-    # Get diarization preference
-    enable_diarization = input("\nEnable speaker diarization? (y/n, default: n): ").lower().strip() == 'y'
-    hf_token = None
-    if enable_diarization:
-        print("\nNote: Speaker diarization requires a HuggingFace token.")
-        print("Get your token at: https://huggingface.co/settings/tokens")
-        hf_token = input("Enter your HuggingFace token: ").strip()
-
     # Generate output path in the same location as the source
     base_name = os.path.splitext(audio_path)[0]
     suffix = "_translated" if translate else ""
@@ -869,7 +985,6 @@ if __name__ == "__main__":
     print(f"Language: {lang_input}")
     print(f"Model: {model_input}")
     print(f"Translation to English: {'enabled' if translate else 'disabled'}")
-    print(f"Speaker diarization: {'enabled' if enable_diarization else 'disabled'}")
     print(f"Output will be saved to: {output_path}\n")
 
     try:
@@ -878,8 +993,6 @@ if __name__ == "__main__":
             output_path,
             model_input,
             selected_lang,
-            enable_diarization,
-            hf_token,
             translate
         )
     except Exception as e:
