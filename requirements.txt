@@ -13,3 +13,4 @@ spacy==3.5.3
 requests>=2.31.0
 editdistance>=1.0.0
 language_tool_python
+deepltr

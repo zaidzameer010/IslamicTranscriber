@@ -406,70 +406,99 @@ def translate_text(text, source_lang=None):
     Translate text to English while preserving Arabic text using enhanced NLP processing
     """
     try:
-        from deep_translator import GoogleTranslator
-
-        # Preprocess non-Arabic text
-        words = text.split()
-        final_words = []
-        current_phrase = []
-
-        # Process each word
-        for word in words:
-            if is_arabic_word(word):
-                # If we have accumulated non-Arabic words, translate them
-                if current_phrase:
-                    # Preprocess the phrase
-                    phrase_text = ' '.join(current_phrase)
-                    preprocessed_text = preprocess_text(phrase_text)
-
-                    # Translate
-                    translator = GoogleTranslator(source=source_lang, target='en')
-                    translated_text = translator.translate(preprocessed_text)
-
-                    if translated_text:
-                        # Postprocess the translation
-                        translated_text = postprocess_text(translated_text)
-
-                        # Handle sentence case
-                        if len(final_words) == 0 or final_words[-1].endswith(('.', '!', '?')):
-                            translated_text = translated_text.capitalize()
-
-                        final_words.extend(translated_text.split())
-                    current_phrase = []
-
-                # Add the Arabic word directly
-                final_words.append(word)
-                print(f"Preserving Arabic: {word}")
-            else:
-                # Accumulate non-Arabic words
-                current_phrase.append(word)
-
-        # Handle any remaining phrase
-        if current_phrase:
-            # Preprocess the phrase
-            phrase_text = ' '.join(current_phrase)
-            preprocessed_text = preprocess_text(phrase_text)
-
-            # Translate
-            translator = GoogleTranslator(source=source_lang, target='en')
-            translated_text = translator.translate(preprocessed_text)
-
-            if translated_text:
-                # Postprocess the translation
-                translated_text = postprocess_text(translated_text)
-
-                # Handle sentence case
-                if len(final_words) == 0 or final_words[-1].endswith(('.', '!', '?')):
-                    translated_text = translated_text.capitalize()
-
-                final_words.extend(translated_text.split())
-
-        # Join all words and do final cleanup
-        result = ' '.join(final_words)
+        from deep_translator import GoogleTranslator, MyMemoryTranslator, DeepL
+        import nltk
+        from nltk.tokenize import sent_tokenize
+        
+        # Initialize NLTK
+        initialize_nltk()
+        
+        # Split into sentences for better context
+        sentences = sent_tokenize(text)
+        final_sentences = []
+        
+        for sentence in sentences:
+            # Preprocess non-Arabic text
+            words = sentence.split()
+            final_words = []
+            current_phrase = []
+            
+            # Process each word
+            for word in words:
+                if is_arabic_word(word) or is_urdu_word(word):
+                    # If we have accumulated non-Arabic/Urdu words, translate them
+                    if current_phrase:
+                        # Preprocess the phrase
+                        phrase_text = ' '.join(current_phrase)
+                        preprocessed_text = preprocess_text(phrase_text)
+                        
+                        # Try multiple translation services for better results
+                        try:
+                            # Try DeepL first (if available)
+                            translator = DeepL(api_key=os.getenv('DEEPL_API_KEY'))
+                            translated_text = translator.translate(preprocessed_text, target='en')
+                        except:
+                            try:
+                                # Fallback to MyMemory for idiomatic translations
+                                translator = MyMemoryTranslator(source=source_lang, target='en')
+                                translated_text = translator.translate(preprocessed_text)
+                            except:
+                                # Final fallback to Google Translate
+                                translator = GoogleTranslator(source=source_lang, target='en')
+                                translated_text = translator.translate(preprocessed_text)
+                        
+                        if translated_text:
+                            # Postprocess the translation
+                            translated_text = postprocess_text(translated_text)
+                            
+                            # Handle sentence case
+                            if len(final_words) == 0:
+                                translated_text = translated_text.capitalize()
+                            
+                            final_words.extend(translated_text.split())
+                        current_phrase = []
+                    
+                    # Add the Arabic/Urdu word directly
+                    final_words.append(word)
+                    print(f"Preserving original text: {word}")
+                else:
+                    # Accumulate non-Arabic/Urdu words
+                    current_phrase.append(word)
+            
+            # Handle any remaining phrase in the sentence
+            if current_phrase:
+                phrase_text = ' '.join(current_phrase)
+                preprocessed_text = preprocess_text(phrase_text)
+                
+                try:
+                    translator = DeepL(api_key=os.getenv('DEEPL_API_KEY'))
+                    translated_text = translator.translate(preprocessed_text, target='en')
+                except:
+                    try:
+                        translator = MyMemoryTranslator(source=source_lang, target='en')
+                        translated_text = translator.translate(preprocessed_text)
+                    except:
+                        translator = GoogleTranslator(source=source_lang, target='en')
+                        translated_text = translator.translate(preprocessed_text)
+                
+                if translated_text:
+                    translated_text = postprocess_text(translated_text)
+                    if len(final_words) == 0:
+                        translated_text = translated_text.capitalize()
+                    final_words.extend(translated_text.split())
+            
+            # Join words and add to final sentences
+            sentence_text = ' '.join(final_words)
+            final_sentences.append(sentence_text)
+        
+        # Join sentences with proper spacing
+        result = ' '.join(final_sentences)
+        
+        # Final cleanup
         result = postprocess_text(result)
-
+        
         return result
-
+    
     except Exception as e:
         print(f"Error during translation: {str(e)}")
         return text  # Return original text if translation fails
@@ -671,7 +700,18 @@ def apply_context_correction(segments, custom_vocab=None):
                 text=corrected_text
             ))
         
-        return corrected_segments
+        # Merge segments that are too short and likely incomplete, adding punctuation if necessary
+        merged_segments = []
+        for seg in corrected_segments:
+            if merged_segments and len(seg.text.split()) < 3:
+                # If previous segment doesn't end with punctuation, add a comma
+                prev_text = merged_segments[-1].text.rstrip()
+                if not prev_text.endswith(('.', '!', '?', ',')):
+                    merged_segments[-1].text = prev_text + ","
+                merged_segments[-1].text += " " + seg.text.lstrip()
+            else:
+                merged_segments.append(seg)
+        return merged_segments
     except Exception as e:
         print(f"Error in context correction: {str(e)}")
         return segments
@@ -681,12 +721,12 @@ def transcribe_with_whisper(model, audio_path, language=None):
     Transcribe audio with optimized Whisper settings using sentence-level processing
     """
     try:
-        # Create an initial prompt to guide transcription
+        # Create an initial prompt to guide transcription with context continuity
         initial_prompt = (
-            "The following is a high-quality transcription with proper punctuation and capitalization. "
-            "Each sentence is complete and grammatically correct. "
-            "Numbers and proper nouns are accurately transcribed. "
-            "Technical terms and domain-specific vocabulary are preserved."
+            "The following is a high-quality transcription with proper punctuation, capitalization, and context continuity. "
+            "Each sentence should be complete and grammatically correct with attention to context and natural breaks. "
+            "Numbers, proper nouns, and technical terms must be accurately transcribed and preserved. "
+            "Ensure that context and topical continuity are maintained for better understanding and translation."
         )
 
         # Optimize transcription settings for sentence-level processing
@@ -694,7 +734,7 @@ def transcribe_with_whisper(model, audio_path, language=None):
             audio_path,
             language=language,
             initial_prompt=initial_prompt,
-            beam_size=15,  # Increased for better accuracy
+            beam_size=20,  # Increased for better accuracy and context options
             temperature=0.0,  # Reduce randomness
             condition_on_previous_text=True,  # Enable context awareness
             word_timestamps=True,  # Enable for better alignment
@@ -717,8 +757,9 @@ def transcribe_with_whisper(model, audio_path, language=None):
         all_text = " ".join(segment.text for segment in segments_list)
         custom_vocab = build_custom_vocabulary(all_text)
 
-        # Apply context-aware corrections
+        # Apply enhanced context-aware corrections
         corrected_segments = apply_context_correction(segments_list, custom_vocab)
+        print("Enhanced context-aware corrections applied to transcription segments.")
 
         # Print detected language info
         if info and hasattr(info, 'language'):
