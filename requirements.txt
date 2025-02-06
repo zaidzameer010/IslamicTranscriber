@@ -9,8 +9,7 @@ tqdm
 ffmpeg-python
 deep-translator
 nltk==3.6.6
-spacy==3.5.3
+spacy
 requests>=2.31.0
 editdistance>=1.0.0
 language_tool_python
-deepltr

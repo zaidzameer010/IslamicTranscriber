@@ -308,42 +308,40 @@ def preprocess_text(text):
     """
     try:
         import nltk
-        import spacy
         from nltk.tokenize import sent_tokenize
 
         # Initialize NLTK
         initialize_nltk()
 
-        # Load spaCy model
+        # Try to load spaCy model
+        use_spacy = True
         try:
+            import spacy
             nlp = spacy.load('en_core_web_sm')
-        except OSError:
-            import subprocess
-            subprocess.run(['python', '-m', 'spacy', 'download', 'en_core_web_sm'])
-            nlp = spacy.load('en_core_web_sm')
+        except Exception as e:
+            print(f"spaCy load error: {e}. Falling back to basic tokenization.")
+            use_spacy = False
 
-        # Split into sentences for better context
         sentences = sent_tokenize(text)
-
         processed_sentences = []
         for sentence in sentences:
-            # Process with spaCy
-            doc = nlp(sentence)
-
-            # Fix common issues
-            processed = []
-            for token in doc:
-                # Handle contractions
-                if token.text.lower() in ["'m", "'s", "'re", "'ve", "'ll", "'d"]:
-                    if processed:
-                        processed[-1] = processed[-1] + token.text
-                else:
-                    processed.append(token.text)
-
-            # Join tokens back together
-            processed_sentence = ' '.join(processed)
+            if use_spacy:
+                try:
+                    doc = nlp(sentence)
+                    processed = []
+                    for token in doc:
+                        if token.text.lower() in ["'m", "'s", "'re", "'ve", "'ll", "'d"]:
+                            if processed:
+                                processed[-1] = processed[-1] + token.text
+                        else:
+                            processed.append(token.text)
+                    processed_sentence = ' '.join(processed)
+                except Exception as e:
+                    print(f"spaCy processing error: {e}. Using basic splitting for sentence: {sentence}")
+                    processed_sentence = ' '.join(sentence.split())
+            else:
+                processed_sentence = ' '.join(sentence.split())
             processed_sentences.append(processed_sentence)
-
         return ' '.join(processed_sentences)
     except Exception as e:
         print(f"Error in preprocessing: {str(e)}")
@@ -401,107 +399,72 @@ def postprocess_text(text):
         print(f"Error in postprocessing: {str(e)}")
         return text
 
+def translate_phrase(phrase, source_lang):
+    """
+    Translate a given phrase from source_lang to English.
+    Uses GoogleTranslator and falls back to MyMemoryTranslator if needed.
+    """
+    try:
+        from deep_translator import GoogleTranslator
+        translator = GoogleTranslator(source=source_lang, target='en')
+        result = translator.translate(phrase)
+        if result and "No translation was found" in result:
+            raise Exception("GoogleTranslator did not return a valid translation.")
+        return result
+    except Exception as e:
+        print(f"Primary translator error: {e}. Trying fallback translator MyMemoryTranslator...")
+        try:
+            from deep_translator import MyMemoryTranslator
+            fallback = MyMemoryTranslator(source=source_lang, target='en')
+            result = fallback.translate(phrase)
+            return result
+        except Exception as e_fallback:
+            print(f"Fallback translator failed: {e_fallback}. Returning original phrase.")
+            return phrase
+
 def translate_text(text, source_lang=None):
     """
     Translate text to English while preserving Arabic text using enhanced NLP processing
     """
     try:
-        from deep_translator import GoogleTranslator, MyMemoryTranslator, DeepL
-        import nltk
-        from nltk.tokenize import sent_tokenize
-        
-        # Initialize NLTK
-        initialize_nltk()
-        
-        # Split into sentences for better context
-        sentences = sent_tokenize(text)
-        final_sentences = []
-        
-        for sentence in sentences:
-            # Preprocess non-Arabic text
-            words = sentence.split()
-            final_words = []
-            current_phrase = []
-            
-            # Process each word
-            for word in words:
-                if is_arabic_word(word) or is_urdu_word(word):
-                    # If we have accumulated non-Arabic/Urdu words, translate them
-                    if current_phrase:
-                        # Preprocess the phrase
-                        phrase_text = ' '.join(current_phrase)
-                        preprocessed_text = preprocess_text(phrase_text)
-                        
-                        # Try multiple translation services for better results
-                        try:
-                            # Try DeepL first (if available)
-                            translator = DeepL(api_key=os.getenv('DEEPL_API_KEY'))
-                            translated_text = translator.translate(preprocessed_text, target='en')
-                        except:
-                            try:
-                                # Fallback to MyMemory for idiomatic translations
-                                translator = MyMemoryTranslator(source=source_lang, target='en')
-                                translated_text = translator.translate(preprocessed_text)
-                            except:
-                                # Final fallback to Google Translate
-                                translator = GoogleTranslator(source=source_lang, target='en')
-                                translated_text = translator.translate(preprocessed_text)
-                        
-                        if translated_text:
-                            # Postprocess the translation
-                            translated_text = postprocess_text(translated_text)
-                            
-                            # Handle sentence case
-                            if len(final_words) == 0:
-                                translated_text = translated_text.capitalize()
-                            
-                            final_words.extend(translated_text.split())
-                        current_phrase = []
-                    
-                    # Add the Arabic/Urdu word directly
-                    final_words.append(word)
-                    print(f"Preserving original text: {word}")
-                else:
-                    # Accumulate non-Arabic/Urdu words
-                    current_phrase.append(word)
-            
-            # Handle any remaining phrase in the sentence
-            if current_phrase:
-                phrase_text = ' '.join(current_phrase)
-                preprocessed_text = preprocess_text(phrase_text)
-                
-                try:
-                    translator = DeepL(api_key=os.getenv('DEEPL_API_KEY'))
-                    translated_text = translator.translate(preprocessed_text, target='en')
-                except:
-                    try:
-                        translator = MyMemoryTranslator(source=source_lang, target='en')
-                        translated_text = translator.translate(preprocessed_text)
-                    except:
-                        translator = GoogleTranslator(source=source_lang, target='en')
-                        translated_text = translator.translate(preprocessed_text)
-                
-                if translated_text:
-                    translated_text = postprocess_text(translated_text)
-                    if len(final_words) == 0:
-                        translated_text = translated_text.capitalize()
-                    final_words.extend(translated_text.split())
-            
-            # Join words and add to final sentences
-            sentence_text = ' '.join(final_words)
-            final_sentences.append(sentence_text)
-        
-        # Join sentences with proper spacing
-        result = ' '.join(final_sentences)
-        
-        # Final cleanup
+        # Preprocess non-Arabic text
+        words = text.split()
+        final_words = []
+        current_phrase = []
+
+        for word in words:
+            if is_arabic_word(word):
+                if current_phrase:
+                    phrase_text = ' '.join(current_phrase)
+                    preprocessed_text = preprocess_text(phrase_text)
+                    translated_text = translate_phrase(preprocessed_text, source_lang)
+                    if translated_text:
+                        translated_text = postprocess_text(translated_text)
+                        if len(final_words) == 0 or final_words[-1].endswith(('.', '!', '?')):
+                            translated_text = translated_text.capitalize()
+                        final_words.extend(translated_text.split())
+                    current_phrase = []
+                final_words.append(word)
+                print(f"Preserving Arabic: {word}")
+            else:
+                current_phrase.append(word)
+
+        if current_phrase:
+            phrase_text = ' '.join(current_phrase)
+            preprocessed_text = preprocess_text(phrase_text)
+            translated_text = translate_phrase(preprocessed_text, source_lang)
+            if translated_text:
+                translated_text = postprocess_text(translated_text)
+                if len(final_words) == 0 or final_words[-1].endswith(('.', '!', '?')):
+                    translated_text = translated_text.capitalize()
+                final_words.extend(translated_text.split())
+
+        result = ' '.join(final_words)
         result = postprocess_text(result)
-        
         return result
-    
     except Exception as e:
         print(f"Error during translation: {str(e)}")
-        return text  # Return original text if translation fails
+        return text
 
 def translate_srt_file(input_srt, output_srt, model, language):
     """
@@ -700,18 +663,7 @@ def apply_context_correction(segments, custom_vocab=None):
                 text=corrected_text
             ))
         
-        # Merge segments that are too short and likely incomplete, adding punctuation if necessary
-        merged_segments = []
-        for seg in corrected_segments:
-            if merged_segments and len(seg.text.split()) < 3:
-                # If previous segment doesn't end with punctuation, add a comma
-                prev_text = merged_segments[-1].text.rstrip()
-                if not prev_text.endswith(('.', '!', '?', ',')):
-                    merged_segments[-1].text = prev_text + ","
-                merged_segments[-1].text += " " + seg.text.lstrip()
-            else:
-                merged_segments.append(seg)
-        return merged_segments
+        return corrected_segments
     except Exception as e:
         print(f"Error in context correction: {str(e)}")
         return segments
@@ -721,12 +673,12 @@ def transcribe_with_whisper(model, audio_path, language=None):
     Transcribe audio with optimized Whisper settings using sentence-level processing
     """
     try:
-        # Create an initial prompt to guide transcription with context continuity
+        # Create an initial prompt to guide transcription
         initial_prompt = (
-            "The following is a high-quality transcription with proper punctuation, capitalization, and context continuity. "
-            "Each sentence should be complete and grammatically correct with attention to context and natural breaks. "
-            "Numbers, proper nouns, and technical terms must be accurately transcribed and preserved. "
-            "Ensure that context and topical continuity are maintained for better understanding and translation."
+            "The following is a high-quality transcription with proper punctuation and capitalization. "
+            "Each sentence is complete and grammatically correct. "
+            "Numbers and proper nouns are accurately transcribed. "
+            "Technical terms and domain-specific vocabulary are preserved."
         )
 
         # Optimize transcription settings for sentence-level processing
@@ -734,7 +686,7 @@ def transcribe_with_whisper(model, audio_path, language=None):
             audio_path,
             language=language,
             initial_prompt=initial_prompt,
-            beam_size=20,  # Increased for better accuracy and context options
+            beam_size=15,  # Increased for better accuracy
             temperature=0.0,  # Reduce randomness
             condition_on_previous_text=True,  # Enable context awareness
             word_timestamps=True,  # Enable for better alignment
@@ -757,9 +709,8 @@ def transcribe_with_whisper(model, audio_path, language=None):
         all_text = " ".join(segment.text for segment in segments_list)
         custom_vocab = build_custom_vocabulary(all_text)
 
-        # Apply enhanced context-aware corrections
+        # Apply context-aware corrections
         corrected_segments = apply_context_correction(segments_list, custom_vocab)
-        print("Enhanced context-aware corrections applied to transcription segments.")
 
         # Print detected language info
         if info and hasattr(info, 'language'):
@@ -806,47 +757,50 @@ def write_srt(segments, output_path):
 
 def transcribe_audio(audio_path, output_path=None, model_name="large-v3", language=None, translate_to_english=False):
     try:
+        from tqdm import tqdm  # ensure tqdm is imported for progress indication
+        # Initialize progress bar with 7 steps
+        pbar = tqdm(total=7, desc="Transcriber Progress", ncols=100)
+
         print("Preprocessing audio...")
         preprocessor = AudioPreprocessor()
-
-        # Convert to WAV if needed
         wav_path = preprocessor.convert_to_wav(audio_path)
-
-        # Process audio
         processed_path = preprocessor.process_audio(wav_path)
+        pbar.update(1)  # Step 1 completed
 
-        # Load optimized Whisper model
         print("\nLoading Whisper model...")
         model = load_whisper_model(model_name)
+        pbar.update(1)  # Step 2 completed
 
-        # Determine language if not specified
         if not language:
             print("Detecting language...")
             language = detect_language(model, processed_path)
             print(f"Detected language: {language}")
+        pbar.update(1)  # Step 3 completed
 
-        # Transcribe with optimized settings
         print("\nTranscribing audio...")
         segments = transcribe_with_whisper(model, processed_path, language)
+        pbar.update(1)  # Step 4 completed
 
-        # Write SRT file
         print("\nWriting transcript to SRT file...")
         write_srt(segments, output_path)
+        pbar.update(1)  # Step 5 completed
 
-        # Translate if requested
         if translate_to_english and language != "en":
             print("\nTranslating to English...")
             translate_srt_file(output_path,
                              output_path.replace(".srt", "_en.srt"),
                              model,
                              language)
+        else:
+            print("\nSkipping translation step...")
+        pbar.update(1)  # Step 6 completed
 
-        print("\nTranscription completed!")
-
-        # Cleanup temporary files
         if wav_path != audio_path:
             os.remove(wav_path)
+        pbar.update(1)  # Step 7 completed
+        pbar.close()
 
+        print("\nTranscription completed!")
         return output_path
 
     except Exception as e:
