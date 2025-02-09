@@ -1,15 +1,11 @@
-torch
-torchaudio
 faster-whisper
-numpy==1.26.1
-scipy==1.11.2
-soundfile
-pydub
 tqdm
-ffmpeg-python
-deep-translator
-nltk==3.6.6
-spacy
-requests>=2.31.0
-editdistance>=1.0.0
-language_tool_python
+click
+rich
+pydub
+numpy
+--index-url https://download.pytorch.org/whl/cu126
+torch
+torchvision
+torchaudio
+moviepy

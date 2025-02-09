@@ -1,56 +1,71 @@
-# Advanced Audio Transcriber with Whisper v3
+# Advanced Audio Transcriber
 
-This is an advanced audio transcriber that uses OpenAI's Whisper v3 model with CUDA acceleration to transcribe audio files and generate SRT subtitles with accurate timestamps.
+An advanced audio transcription tool using OpenAI's Whisper v3 model with support for multiple languages and accurate timestamps.
 
 ## Features
 
-- Uses Whisper Large v3 model for high accuracy
-- CUDA acceleration for faster processing
-- Generates SRT format output with precise timestamps
-- Supports multiple languages (auto-detection)
-- Progress bar for transcription status
+- Uses Whisper v3 large model for state-of-the-art transcription
+- Supports 20 languages including Arabic and Urdu
+- Generates SRT format output with accurate timestamps
+- Interactive CLI interface with progress indicators
+- GPU acceleration (if available)
+- Saves output in the same directory as the source file
 
-## Requirements
+## Supported Languages
 
-- Python 3.8+
-- NVIDIA GPU with CUDA support
-- Required Python packages (install using requirements.txt)
+- Arabic (ar)
+- Urdu (ur)
+- English (en)
+- Hindi (hi)
+- Persian (fa)
+- Turkish (tr)
+- French (fr)
+- German (de)
+- Spanish (es)
+- Italian (it)
+- Portuguese (pt)
+- Dutch (nl)
+- Russian (ru)
+- Japanese (ja)
+- Korean (ko)
+- Chinese (zh)
+- Malay (ms)
+- Bengali (bn)
+- Indonesian (id)
+- Tamil (ta)
 
 ## Installation
 
-1. Install the required packages:
-```bash
-pip install -r requirements.txt
-```
+1. Install Python 3.8 or higher
+2. Install required packages:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
 ## Usage
 
 Basic usage:
 ```bash
-python transcriber.py path/to/your/audio.mp3
+python transcriber.py "path/to/your/audio.mp3"
 ```
 
-With custom output path:
+Specify language (optional):
 ```bash
-python transcriber.py path/to/your/audio.mp3 --output path/to/output.srt
+python transcriber.py "path/to/your/audio.mp3" --language ar
 ```
 
-With different model:
+Choose model size (optional):
 ```bash
-python transcriber.py path/to/your/audio.mp3 --model medium
+python transcriber.py "path/to/your/audio.mp3" --model large-v3
 ```
-
-## Supported Audio Formats
-
-- MP3
-- WAV
-- M4A
-- and other formats supported by ffmpeg
 
 ## Output
 
-The script will generate an SRT file containing:
-- Sequential segment numbers
-- Timestamp ranges (HH:MM:SS,mmm)
-- Transcribed text
-- Proper SRT formatting
+The script will create an SRT file in the same directory as the input audio file. The output file will have the same name as the input file but with a `.srt` extension.
+
+## Requirements
+
+- Python 3.8+
+- CUDA-compatible GPU (optional, for faster processing)
+- Minimum 8GB RAM
+- Disk space for model files (~3GB for large-v3)
