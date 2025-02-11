@@ -1,11 +1,10 @@
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 faster-whisper
 tqdm
 click
 rich
 pydub
-numpy
---index-url https://download.pytorch.org/whl/cu126
-torch
-torchvision
-torchaudio
-moviepy
+numpy==1.23.1
+transformers
+librosa
+soundfile
