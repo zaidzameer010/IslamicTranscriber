@@ -4,7 +4,13 @@ tqdm
 click
 rich
 pydub
-numpy==1.23.1
+numpy>=1.24.0
 transformers
 librosa
 soundfile
+srt
+webvtt-py
+noisereduce
+spacy>=3.0.0
+langid
+langdetect
