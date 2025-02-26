@@ -14,3 +14,8 @@ noisereduce
 spacy>=3.0.0
 langid
 langdetect
+vosk
+SpeechRecognition
+nltk
+transformers
+requests>=2.31.0
