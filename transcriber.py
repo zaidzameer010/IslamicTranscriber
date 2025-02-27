@@ -162,7 +162,7 @@ def transcribe_audio(
     device: str = None,
     compute_type: str = None
 ) -> List[dict]:
-    """Single-pass transcription using Whisper large-v3 model with enhanced Arabic support"""
+    """Single-pass transcription using Whisper large-v3 model with enhanced Arabic support and accurate timestamps"""
     console = Console()
     
     # Get preset configuration
@@ -180,7 +180,7 @@ def transcribe_audio(
     ))
     console.print(f"Using: [cyan]{device}[/cyan] | Quality: [cyan]{quality_preset}[/cyan]")
     
-    # Initialize model with enhanced Arabic settings
+    # Initialize model with enhanced settings
     model = WhisperModel(
         model_size, 
         device=device, 
@@ -188,30 +188,29 @@ def transcribe_audio(
         download_root=os.path.expanduser("~/.cache/whisper")
     )
     
-    # Enhanced parameters for Arabic transcription
+    # Enhanced parameters for accurate transcription and timestamps
     transcription_params = {
-        "beam_size": max(beam_size, 10),  # Ensure minimum beam size of 10 for Arabic
-        "language": language if language else "ar",  # Default to Arabic if no language specified
-        "vad_filter": vad_filter,
+        "beam_size": max(beam_size, 10),  # Larger beam size for better search
+        "language": language if language else "ar",
+        "vad_filter": True,  # Enable VAD for better segment detection
         "vad_parameters": dict(
-            min_silence_duration_ms=500,
-            speech_pad_ms=500
+            min_silence_duration_ms=300,  # Reduced for finer segmentation
+            speech_pad_ms=100,  # Reduced padding for more precise boundaries
+            threshold=0.35  # Balanced threshold for speech detection
         ),
         "word_timestamps": True,
         "initial_prompt": LANGUAGE_PROMPTS.get(language, DEFAULT_MULTILINGUAL_PROMPT),
-        "temperature": [0.0, 0.2, 0.4, 0.6],  # Temperature sampling for better accuracy
-        "best_of": 3,  # Increase best_of for better selection
+        "temperature": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0],  # More temperature values for better sampling
+        "best_of": 5,  # Increased for better candidate selection
         "condition_on_previous_text": True,
-        "no_speech_threshold": 0.3,  # Lower threshold to catch quiet speech
-        "compression_ratio_threshold": 2.4,  # Adjusted for speech patterns
+        "no_speech_threshold": 0.3,
+        "compression_ratio_threshold": 2.4
     }
     
     # If using large-v3 with sufficient compute, add more options for accuracy
     if model_size == "large-v3" and device in ["cuda", "mps"]:
         transcription_params.update({
-            "temperature": [0.0, 0.2, 0.4, 0.6],
-            "best_of": 2,
-            "condition_on_previous_text": True
+            "best_of": 5
         })
     
     # Transcribe audio
@@ -241,7 +240,7 @@ def transcribe_audio(
 
 
 def post_process_segments(segments, detected_language):
-    """Apply post-processing to improve transcription quality"""
+    """Apply post-processing to improve transcription quality and timestamp accuracy"""
     processed = []
     
     # Language-specific corrections dictionary
@@ -267,20 +266,37 @@ def post_process_segments(segments, detected_language):
         segment["text"] = text
         processed.append(segment)
     
-    # Merge very short segments for better readability
+    # Enhanced segment merging with timestamp adjustments
     if len(processed) > 1:
         merged = [processed[0]]
         
         for current in processed[1:]:
             previous = merged[-1]
             
-            # If segments are close in time and previous is short
-            if (current['start'] - previous['end'] < 0.3 and 
-                len(previous['text'].split()) < 4):
+            # Calculate gap between segments
+            gap = current['start'] - previous['end']
+            
+            # If segments are very close (less than 0.3s gap) and previous is short
+            if (gap < 0.3 and len(previous['text'].split()) < 4):
+                # Adjust timestamps for smoother transition
+                midpoint = (current['start'] + previous['end']) / 2
+                previous['end'] = midpoint
+                current['start'] = midpoint
+                
                 # Merge segments
                 previous['end'] = current['end']
                 previous['text'] += " " + current['text']
+                
+                # If words info exists, merge it
+                if 'words' in previous and 'words' in current:
+                    previous['words'].extend(current['words'])
             else:
+                # If gap is small but segments shouldn't be merged,
+                # adjust timestamps to prevent overlap
+                if gap < 0:
+                    midpoint = (current['start'] + previous['end']) / 2
+                    previous['end'] = midpoint
+                    current['start'] = midpoint
                 merged.append(current)
         
         return merged
