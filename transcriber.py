@@ -52,18 +52,6 @@ import glob
 
 # Quality/Speed tradeoff options
 QUALITY_PRESETS = {
-    "fastest": {
-        "model_size": "medium",
-        "beam_size": 1, 
-        "vad_filter": True,
-        "compute_type": "int8",
-    },
-    "balanced": {
-        "model_size": "large-v2", 
-        "beam_size": 5,
-        "vad_filter": True,
-        "compute_type": "float16" if True else "int8",  # Will be properly set based on device
-    },
     "accurate": {
         "model_size": "large-v3",
         "beam_size": 10,
@@ -74,11 +62,20 @@ QUALITY_PRESETS = {
 
 # Language-specific prompts to guide transcription
 LANGUAGE_PROMPTS = {
-    "ar": "بسم الله الرحمن الرحيم. النص التالي باللغة العربية:",
+    "ar": """بسم الله الرحمن الرحيم. هذا نص عربي فصيح. يرجى كتابة النص بدقة مع علامات الترقيم والتشكيل:
+
+النص التالي باللغة العربية الفصحى. يجب مراعاة:
+- كتابة الهمزات بشكل صحيح
+- وضع علامات الترقيم المناسبة
+- مراعاة الفواصل بين الجمل
+- كتابة التاء المربوطة والمفتوحة بشكل صحيح
+""",
     "ur": "بسم اللہ الرحمٰن الرحیم۔ یہ اردو میں ٹرانسکرپشن ہے:",
     "en": "The following is English speech transcription:",
-    "mixed": "This audio contains mixed language content, including Arabic, Urdu and English."
 }
+
+DEFAULT_MULTILINGUAL_PROMPT = """The following audio may contain a mix of Arabic, Urdu, and English.
+Please transcribe each language accurately with proper punctuation while maintaining the original language."""
 
 # Common error corrections for each language
 CORRECTIONS = {
@@ -86,6 +83,20 @@ CORRECTIONS = {
         # Add common Arabic transcription errors here
         "ه ذا": "هذا",
         "ف ي": "في",
+        "ع ن": "عن",
+        "م ن": "من",
+        "إ ن": "إن",
+        "أ ن": "أن",
+        "ا ل": "ال",
+        # Common mistakes with hamza
+        "اسلام": "إسلام",
+        "انسان": "إنسان",
+        "امام": "إمام",
+        # Fixing common spacing issues
+        " ،": "،",
+        " .": ".",
+        " ؟": "؟",
+        "  ": " ",
     },
     "ur": {
         # Add common Urdu transcription errors here
@@ -146,12 +157,12 @@ def extract_audio(file_path: str, temp_dir: str, optimize: bool = True) -> str:
 
 def transcribe_audio(
     audio_path: str, 
-    quality_preset: str = "balanced",
+    quality_preset: str = "accurate",  
     language: str = None,  
     device: str = None,
     compute_type: str = None
 ) -> List[dict]:
-    """Single-pass transcription with optimized parameters"""
+    """Single-pass transcription using Whisper large-v3 model with enhanced Arabic support"""
     console = Console()
     
     # Get preset configuration
@@ -169,7 +180,7 @@ def transcribe_audio(
     ))
     console.print(f"Using: [cyan]{device}[/cyan] | Quality: [cyan]{quality_preset}[/cyan]")
     
-    # Initialize model
+    # Initialize model with enhanced Arabic settings
     model = WhisperModel(
         model_size, 
         device=device, 
@@ -177,17 +188,22 @@ def transcribe_audio(
         download_root=os.path.expanduser("~/.cache/whisper")
     )
     
-    # Set up optimized parameters
+    # Enhanced parameters for Arabic transcription
     transcription_params = {
-        "beam_size": beam_size,
-        "language": None,  
+        "beam_size": max(beam_size, 10),  # Ensure minimum beam size of 10 for Arabic
+        "language": language if language else "ar",  # Default to Arabic if no language specified
         "vad_filter": vad_filter,
         "vad_parameters": dict(
             min_silence_duration_ms=500,
             speech_pad_ms=500
         ),
         "word_timestamps": True,
-        "initial_prompt": LANGUAGE_PROMPTS["mixed"],  
+        "initial_prompt": LANGUAGE_PROMPTS.get(language, DEFAULT_MULTILINGUAL_PROMPT),
+        "temperature": [0.0, 0.2, 0.4, 0.6],  # Temperature sampling for better accuracy
+        "best_of": 3,  # Increase best_of for better selection
+        "condition_on_previous_text": True,
+        "no_speech_threshold": 0.3,  # Lower threshold to catch quiet speech
+        "compression_ratio_threshold": 2.4,  # Adjusted for speech patterns
     }
     
     # If using large-v3 with sufficient compute, add more options for accuracy
@@ -413,32 +429,29 @@ def main():
         
         # Quality preset selection
         quality_options = {
-            "1": ("fastest", "Fastest - Less accurate but quick (Medium model)"),
-            "2": ("balanced", "Balanced - Good trade-off (Large-v2 model)"),
-            "3": ("accurate", "Accurate - Most accurate but slower (Large-v3 model)")
+            "1": ("accurate", "Accurate - Most accurate but slower (Large-v3 model)")
         }
         
         console.print("Select quality preset:")
         for key, (preset, desc) in quality_options.items():
             console.print(f"[bold cyan]{key}.[/bold cyan] {desc}")
         
-        quality_choice = Prompt.ask("Enter option number", default="2")
-        quality_preset = quality_options.get(quality_choice, ("balanced", ""))[0]
+        quality_choice = Prompt.ask("Enter option number", default="1")
+        quality_preset = quality_options.get(quality_choice, ("accurate", ""))[0]
         
         # Language selection
         language_options = {
             "1": ("ar", "Arabic"),
             "2": ("ur", "Urdu"),
             "3": ("en", "English"),
-            "4": ("mixed", "Mixed (Urdu/Arabic/English)"),
-            "5": (None, "Auto-detect (let Whisper decide)")
+            "4": (None, "Auto-detect (let Whisper decide)")
         }
         
         console.print("Select language:")
         for key, (code, name) in language_options.items():
             console.print(f"[bold cyan]{key}.[/bold cyan] {name}")
         
-        lang_choice = Prompt.ask("Enter option number", default="5")
+        lang_choice = Prompt.ask("Enter option number", default="4")
         language = language_options.get(lang_choice, (None, ""))[0]
         
         # Create temporary directory
