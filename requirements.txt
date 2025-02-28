@@ -1,21 +1,12 @@
 # torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 faster-whisper
-tqdm
-click
 rich
 pydub
 numpy>=1.24.0
-transformers
 librosa
 soundfile
 srt
-webvtt-py
 noisereduce
 spacy>=3.0.0
 langid
-langdetect
-vosk
-SpeechRecognition
-nltk
-transformers
 requests>=2.31.0

@@ -54,7 +54,7 @@ import glob
 QUALITY_PRESETS = {
     "accurate": {
         "model_size": "large-v3",
-        "beam_size": 10,
+        "beam_size": 15,
         "vad_filter": True, 
         "compute_type": "float16" if True else "int8",  # Will be properly set based on device
     }
@@ -77,10 +77,44 @@ LANGUAGE_PROMPTS = {
 DEFAULT_MULTILINGUAL_PROMPT = """The following audio may contain a mix of Arabic, Urdu, and English.
 Please transcribe each language accurately with proper punctuation while maintaining the original language."""
 
+# Islamic terminology dictionary for context-aware corrections
+ISLAMIC_TERMINOLOGY = {
+    "ar": {
+        "الله": {"correct": "اللَّه", "context": ["بسم", "رسول", "صلى"]},
+        "محمد": {"correct": "مُحَمَّد", "context": ["النبي", "رسول", "صلى"]},
+        "القرآن": {"correct": "القُرْآن", "context": ["تلاوة", "آيات", "سورة"]},
+        "الحديث": {"correct": "الحَدِيث", "context": ["صحيح", "رواه", "في"]},
+        "الصلاة": {"correct": "الصَّلاة", "context": ["أقام", "فرض", "وقت"]},
+        "المسجد": {"correct": "المَسْجِد", "context": ["في", "إلى", "من"]},
+        "الإسلام": {"correct": "الإِسْلام", "context": ["دين", "أركان", "شريعة"]},
+        "الإيمان": {"correct": "الإِيمان", "context": ["أركان", "شعب", "زيادة"]}
+    },
+    "ur": {
+        "اللہ": {"correct": "اللہ تعالیٰ", "context": ["بسم", "رسول", "صلی"]},
+        "محمد": {"correct": "محمد ﷺ", "context": ["حضرت", "رسول", "نبی"]},
+        "قرآن": {"correct": "قرآن پاک", "context": ["تلاوت", "آیات", "سورہ"]},
+        "حدیث": {"correct": "حدیث شریف", "context": ["صحیح", "روایت", "میں"]},
+        "نماز": {"correct": "نماز", "context": ["فرض", "وقت", "پڑھنا"]},
+        "مسجد": {"correct": "مسجد", "context": ["میں", "سے", "کو"]},
+        "اسلام": {"correct": "اسلام", "context": ["دین", "ارکان", "شریعت"]},
+        "ایمان": {"correct": "ایمان", "context": ["ارکان", "لانا", "پر"]}
+    },
+    "en": {
+        "allah": {"correct": "Allah", "context": ["praise", "god", "worship"]},
+        "muhammad": {"correct": "Muhammad (peace be upon him)", "context": ["prophet", "messenger", "said"]},
+        "quran": {"correct": "Qur'an", "context": ["holy", "verse", "surah"]},
+        "hadith": {"correct": "Hadith", "context": ["narrated", "reported", "authentic"]},
+        "prayer": {"correct": "prayer", "context": ["five", "daily", "time"]},
+        "mosque": {"correct": "mosque", "context": ["in", "to", "from"]},
+        "islam": {"correct": "Islam", "context": ["religion", "pillars", "faith"]},
+        "iman": {"correct": "Iman", "context": ["faith", "belief", "pillars"]}
+    }
+}
+
 # Common error corrections for each language
 CORRECTIONS = {
     "ar": {
-        # Add common Arabic transcription errors here
+        # Common word spacing errors
         "ه ذا": "هذا",
         "ف ي": "في",
         "ع ن": "عن",
@@ -97,18 +131,80 @@ CORRECTIONS = {
         " .": ".",
         " ؟": "؟",
         "  ": " ",
+        # Islamic terms with proper diacritics
+        "سبحان الله": "سُبْحَانَ اللَّه",
+        "الحمد لله": "الحَمْدُ لِلَّه",
+        "ان شاء الله": "إِنْ شَاءَ اللَّه",
+        "بسم الله": "بِسْمِ اللَّه",
+        # Common phonetic confusions
+        "ظ/ض": "ظ",
+        "س/ص": "ص",
+        "ح/ه": "ح",
+        # Tashkeel corrections
+        "اللة": "اللَّه",
+        "رحمة": "رَحْمَة",
+        "بركة": "بَرَكَة"
     },
     "ur": {
-        # Add common Urdu transcription errors here
+        # Common word spacing errors
         "ک يا": "کیا",
         "ه ے": "هے",
+        # Common Islamic terms
+        "سبحان اللہ": "سبحان اللہ",
+        "الحمد للہ": "الحمد للہ",
+        "ان شاء اللہ": "ان شاء اللہ",
+        "بسم اللہ": "بسم اللہ الرحمٰن الرحیم",
+        # Phonetic corrections
+        "ذ/ز": "ذ",
+        "ث/س": "ث",
+        "ح/ہ": "ح",
+        # Common mistakes
+        "انشااللہ": "ان شاء اللہ",
+        "ماشااللہ": "ما شاء اللہ",
+        "جزاکاللہ": "جزاک اللہ"
     },
     "en": {
-        # Add common English transcription errors here
+        # Common word spacing errors
         "i s": "is",
         "i t": "it",
+        # Common Islamic terms
+        "inshallah": "In sha Allah",
+        "mashallah": "Ma sha Allah",
+        "alhamdulillah": "Alhamdulillah",
+        "subhanallah": "Subhan Allah",
+        # Common capitalization mistakes
+        "ramadan": "Ramadan",
+        "eid": "Eid",
+        "surah": "Surah",
+        "ayah": "Ayah",
+        "jummah": "Jummah",
+        "hajj": "Hajj",
+        "umrah": "Umrah",
+        "salah": "Salah"
     }
 }
+
+# Arabic-specific character sets and patterns
+ARABIC_CHARS = set('ءآأؤإئابةتثجحخدذرزسشصضطظعغفقكلمنهوىيًٌٍَُِّْ')
+ARABIC_PATTERNS = [
+    r'\b(قال|قالت|يقول|تقول|قلت)\b',  # Speech indicators
+    r'\b(الله|الرحمن|الرحيم)\b',  # Allah's names
+    r'\b(آية|سورة|القرآن)\b',  # Quran references
+    r'\b(حديث|صحيح|روى)\b',  # Hadith references
+]
+
+# Urdu-specific character sets and patterns
+URDU_CHARS = set('ءآأؤإئابةتثجحخدذرزسشصضطظعغفقكلمنهوىيےٹڈڑژڈھہ')
+URDU_PATTERNS = [
+    r'\b(کہا|کہتے|کہتی|بولے)\b',  # Speech indicators
+    r'\b(اللہ|رحمٰن|رحیم)\b',  # Allah's names
+    r'\b(آیت|سورہ|قرآن)\b',  # Quran references
+    r'\b(حدیث|صحیح|روایت)\b',  # Hadith references
+    r'\b(ہے|ہیں|تھا|تھے|گا|گے)\b',  # Urdu-specific verbs
+]
+
+# English character set
+ENGLISH_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')
 
 
 def get_device_info():
@@ -125,7 +221,7 @@ def get_device_info():
         return "cpu", "int8"
 
 
-def extract_audio(file_path: str, temp_dir: str, optimize: bool = True) -> str:
+def extract_audio(file_path: str, temp_dir: str, optimize: bool = True, progress_callback=None) -> str:
     """Extract audio efficiently for transcription"""
     console = Console()
     
@@ -133,21 +229,31 @@ def extract_audio(file_path: str, temp_dir: str, optimize: bool = True) -> str:
     file_name = input_path.stem
     temp_audio_path = os.path.join(temp_dir, f"{file_name}.wav")
     
-    with console.status(f"[bold green]Extracting audio from {input_path.name}..."):
+    with console.status(f"[bold green]Extracting audio from {input_path.name}...") if not progress_callback else nullcontext():
         try:
             # Load audio
+            if progress_callback:
+                progress_callback(0, "Loading audio file...")
             audio = AudioSegment.from_file(file_path)
+            if progress_callback:
+                progress_callback(25, "Converting to mono...")
             
             # Efficient conversion for speech recognition
             audio = audio.set_channels(1)  # Mono
             audio = audio.set_frame_rate(16000)  # 16kHz is optimal for Whisper
+            if progress_callback:
+                progress_callback(50, "Optimizing audio...")
             
             # For large files, downsample to reduce processing time
             if optimize and len(audio) > 600000:  # If longer than 10 minutes
                 audio = audio.set_sample_width(2)  # 16-bit is sufficient
+            if progress_callback:
+                progress_callback(75, "Exporting audio...")
             
             # Export optimized audio
             audio.export(temp_audio_path, format="wav")
+            if progress_callback:
+                progress_callback(100, "Audio extraction complete")
             return temp_audio_path
             
         except Exception as e:
@@ -160,7 +266,8 @@ def transcribe_audio(
     quality_preset: str = "accurate",  
     language: str = None,  
     device: str = None,
-    compute_type: str = None
+    compute_type: str = None,
+    progress_callback=None
 ) -> List[dict]:
     """Single-pass transcription using Whisper large-v3 model with enhanced Arabic support and accurate timestamps"""
     console = Console()
@@ -174,6 +281,9 @@ def transcribe_audio(
     # Determine device if not specified
     if not device or not compute_type:
         device, compute_type = get_device_info()
+    
+    if progress_callback:
+        progress_callback(0, f"Initializing Whisper {model_size} model...")
         
     console.print(Panel(
         Text.from_markup(f"[bold]Transcribing with Whisper [cyan]{model_size}[/cyan] model...")
@@ -188,9 +298,12 @@ def transcribe_audio(
         download_root=os.path.expanduser("~/.cache/whisper")
     )
     
+    if progress_callback:
+        progress_callback(20, "Setting up transcription parameters...")
+    
     # Enhanced parameters for accurate transcription and timestamps
     transcription_params = {
-        "beam_size": max(beam_size, 10),  # Larger beam size for better search
+        "beam_size": max(beam_size, 15),  # Larger beam size for better search
         "language": language if language else "ar",
         "vad_filter": True,  # Enable VAD for better segment detection
         "vad_parameters": dict(
@@ -213,8 +326,14 @@ def transcribe_audio(
             "best_of": 5
         })
     
+    if progress_callback:
+        progress_callback(30, "Starting transcription process...")
+    
     # Transcribe audio
     segments, info = model.transcribe(audio_path, **transcription_params)
+    
+    if progress_callback:
+        progress_callback(70, "Processing transcription segments...")
     
     # Process and format segments
     segments_list = []
@@ -233,37 +352,256 @@ def transcribe_audio(
     language_confidence = round(info.language_probability * 100, 2)
     console.print(f"Detected language: [cyan]{detected_language}[/cyan] (Confidence: {language_confidence}%)")
     
+    if progress_callback:
+        progress_callback(90, "Applying post-processing...")
+    
     # Apply post-processing fixes
-    processed_segments = post_process_segments(segments_list, detected_language)
+    processed_segments = post_process_segments(segments_list, detected_language, language)
+    
+    if progress_callback:
+        progress_callback(100, "Transcription complete")
     
     return processed_segments
 
 
-def post_process_segments(segments, detected_language):
+def is_arabic_text(text: str) -> bool:
+    """Determine if text is primarily Arabic based on character distribution and patterns"""
+    if not text.strip():
+        return False
+        
+    # Count Arabic characters
+    arabic_char_count = sum(1 for char in text if char in ARABIC_CHARS)
+    total_chars = len(text.strip())
+    
+    # Check for Arabic patterns
+    pattern_matches = sum(1 for pattern in ARABIC_PATTERNS if re.search(pattern, text))
+    
+    # Calculate Arabic score
+    arabic_score = (arabic_char_count / total_chars if total_chars > 0 else 0) + (0.2 * pattern_matches)
+    
+    # Check for specific Arabic-only characters that don't appear in Urdu
+    arabic_specific_chars = set('ةًٌٍَُِّْ')
+    has_arabic_specific = any(char in arabic_specific_chars for char in text)
+    
+    return arabic_score > 0.7 or has_arabic_specific
+
+
+def is_urdu_text(text: str) -> bool:
+    """Determine if text is primarily Urdu based on character distribution and patterns"""
+    if not text.strip():
+        return False
+        
+    # Count Urdu characters
+    urdu_char_count = sum(1 for char in text if char in URDU_CHARS)
+    total_chars = len(text.strip())
+    
+    # Check for Urdu patterns
+    pattern_matches = sum(1 for pattern in URDU_PATTERNS if re.search(pattern, text))
+    
+    # Calculate Urdu score
+    urdu_score = (urdu_char_count / total_chars if total_chars > 0 else 0) + (0.2 * pattern_matches)
+    
+    # Check for specific Urdu-only characters that don't appear in Arabic
+    urdu_specific_chars = set('ےٹڈڑژڈھہ')
+    has_urdu_specific = any(char in urdu_specific_chars for char in text)
+    
+    return urdu_score > 0.7 or has_urdu_specific
+
+
+def detect_language_context(text: str, window_size: int = 5) -> str:
+    """Enhanced language detection using context windows and statistical analysis"""
+    # Split text into words
+    words = text.split()
+    if not words:
+        return "en"  # Default to English for empty text
+    
+    # Initialize language scores
+    scores = {"ar": 0, "ur": 0, "en": 0}
+    
+    # Check if entire text is clearly Arabic or Urdu
+    if is_arabic_text(text):
+        return "ar"
+    if is_urdu_text(text):
+        return "ur"
+    
+    # Analyze each word in context
+    for i in range(len(words)):
+        word = words[i]
+        
+        # Get context window
+        start = max(0, i - window_size)
+        end = min(len(words), i + window_size + 1)
+        context = words[start:end]
+        context_text = ' '.join(context)
+        
+        # Score based on character sets
+        word_chars = set(word)
+        ar_score = len(word_chars & ARABIC_CHARS) / max(len(word_chars), 1)
+        ur_score = len(word_chars & URDU_CHARS) / max(len(word_chars), 1)
+        en_score = len(word_chars & ENGLISH_CHARS) / max(len(word_chars), 1)
+        
+        # Check for language-specific characters
+        if any(char in set('ةًٌٍَُِّْ') for char in word):
+            ar_score += 0.5  # Boost Arabic score for Arabic-specific chars
+        if any(char in set('ےٹڈڑژڈھہ') for char in word):
+            ur_score += 0.5  # Boost Urdu score for Urdu-specific chars
+        
+        # Add context-based scoring
+        for ctx_word in context:
+            if any(term in ctx_word.lower() for term in ISLAMIC_TERMINOLOGY.get("ar", {})):
+                ar_score += 0.2
+            if any(term in ctx_word.lower() for term in ISLAMIC_TERMINOLOGY.get("ur", {})):
+                ur_score += 0.2
+            if any(term in ctx_word.lower() for term in ISLAMIC_TERMINOLOGY.get("en", {})):
+                en_score += 0.2
+        
+        # Check for language-specific patterns in context
+        for pattern in ARABIC_PATTERNS:
+            if re.search(pattern, context_text):
+                ar_score += 0.3
+        for pattern in URDU_PATTERNS:
+            if re.search(pattern, context_text):
+                ur_score += 0.3
+        
+        # Update overall scores
+        scores["ar"] += ar_score
+        scores["ur"] += ur_score
+        scores["en"] += en_score
+    
+    # Return the language with highest score
+    return max(scores.items(), key=lambda x: x[1])[0]
+
+
+def apply_context_aware_corrections(text: str, language: str) -> str:
+    """Apply context-aware corrections using surrounding words"""
+    words = text.split()
+    corrected_words = []
+    
+    for i, word in enumerate(words):
+        # Get context window
+        start = max(0, i - 2)
+        end = min(len(words), i + 3)
+        context = ' '.join(words[start:end]).lower()
+        
+        # Check Islamic terminology dictionary
+        word_lower = word.lower()
+        if word_lower in ISLAMIC_TERMINOLOGY.get(language, {}):
+            term_info = ISLAMIC_TERMINOLOGY[language][word_lower]
+            # Check if context matches
+            if any(ctx in context for ctx in term_info["context"]):
+                word = term_info["correct"]
+        
+        # Apply regular corrections
+        if language in CORRECTIONS:
+            for error, correction in CORRECTIONS[language].items():
+                if word == error:
+                    word = correction
+        
+        corrected_words.append(word)
+    
+    return ' '.join(corrected_words)
+
+
+def format_mixed_language_text(text: str, primary_language: str) -> str:
+    """Format text with mixed languages, adding appropriate markers for clarity"""
+    words = text.split()
+    formatted_words = []
+    current_language = None
+    language_segment = []
+    
+    # Process each word to identify language segments
+    for word in words:
+        # Skip empty words
+        if not word.strip():
+            continue
+            
+        # Determine word language
+        word_chars = set(word)
+        ar_chars = len(word_chars & ARABIC_CHARS)
+        ur_chars = len(word_chars & URDU_CHARS)
+        en_chars = len(word_chars & ENGLISH_CHARS)
+        
+        # Determine language based on character distribution
+        if ar_chars > ur_chars and ar_chars > en_chars:
+            word_language = "ar"
+        elif ur_chars > ar_chars and ur_chars > en_chars:
+            word_language = "ur"
+        elif en_chars > ar_chars and en_chars > ur_chars:
+            word_language = "en"
+        else:
+            # Default to primary language if unclear
+            word_language = primary_language
+        
+        # Handle language transitions
+        if current_language is None:
+            current_language = word_language
+            language_segment.append(word)
+        elif word_language == current_language:
+            language_segment.append(word)
+        else:
+            # Process completed language segment
+            segment_text = ' '.join(language_segment)
+            
+            # Apply language-specific formatting
+            if current_language != primary_language and len(language_segment) > 1:
+                # Add formatting for non-primary language segments
+                if current_language == "ar" and primary_language == "ur":
+                    segment_text = f"[{segment_text}]"  # Arabic in brackets when primary is Urdu
+                elif current_language == "ur" and primary_language == "ar":
+                    segment_text = f"<{segment_text}>"  # Urdu in angle brackets when primary is Arabic
+            
+            formatted_words.append(segment_text)
+            
+            # Start new segment
+            current_language = word_language
+            language_segment = [word]
+    
+    # Process the last segment
+    if language_segment:
+        segment_text = ' '.join(language_segment)
+        if current_language != primary_language and len(language_segment) > 1:
+            if current_language == "ar" and primary_language == "ur":
+                segment_text = f"[{segment_text}]"  # Arabic in brackets when primary is Urdu
+            elif current_language == "ur" and primary_language == "ar":
+                segment_text = f"<{segment_text}>"  # Urdu in angle brackets when primary is Arabic
+        formatted_words.append(segment_text)
+    
+    return ' '.join(formatted_words)
+
+
+def post_process_segments(segments, detected_language, selected_language=None):
     """Apply post-processing to improve transcription quality and timestamp accuracy"""
     processed = []
     
-    # Language-specific corrections dictionary
-    corrections = {}
-    
-    # Choose correction set based on detected language
-    if detected_language in ["ar", "ur", "en"]:
-        corrections = CORRECTIONS[detected_language]
-    else:
-        # For mixed content, include all corrections
-        for lang_corrections in CORRECTIONS.values():
-            corrections.update(lang_corrections)
+    # Determine primary language (user selected or detected)
+    primary_language = selected_language if selected_language else detected_language
     
     # Process each segment
     for segment in segments:
         text = segment["text"]
         
-        # Apply text corrections
+        # Detect language for this segment (may differ from overall detected language)
+        segment_language = detect_language_context(text) 
+        
+        # Apply basic corrections first
+        corrections = {}
+        if segment_language in ["ar", "ur", "en"]:
+            corrections = CORRECTIONS[segment_language]
+        else:
+            # For mixed content, include all corrections
+            for lang_corrections in CORRECTIONS.values():
+                corrections.update(lang_corrections)
+        
+        # Apply basic text corrections
         for error, correction in corrections.items():
             text = text.replace(error, correction)
         
+        # Apply context-aware corrections
+        text = apply_context_aware_corrections(text, segment_language)
+        
         # Update with corrected text
         segment["text"] = text
+        segment["detected_language"] = segment_language  # Store detected language for reference
         processed.append(segment)
     
     # Enhanced segment merging with timestamp adjustments
@@ -283,13 +621,17 @@ def post_process_segments(segments, detected_language):
                 previous['end'] = midpoint
                 current['start'] = midpoint
                 
-                # Merge segments
-                previous['end'] = current['end']
-                previous['text'] += " " + current['text']
-                
-                # If words info exists, merge it
-                if 'words' in previous and 'words' in current:
-                    previous['words'].extend(current['words'])
+                # Only merge if they are the same language
+                if previous.get('detected_language') == current.get('detected_language'):
+                    # Merge segments
+                    previous['end'] = current['end']
+                    previous['text'] += " " + current['text']
+                    
+                    # If words info exists, merge it
+                    if 'words' in previous and 'words' in current:
+                        previous['words'].extend(current['words'])
+                else:
+                    merged.append(current)
             else:
                 # If gap is small but segments shouldn't be merged,
                 # adjust timestamps to prevent overlap
@@ -443,17 +785,8 @@ def main():
         output_dir = input_path.parent
         output_file = output_dir / f"{input_path.stem}.srt"
         
-        # Quality preset selection
-        quality_options = {
-            "1": ("accurate", "Accurate - Most accurate but slower (Large-v3 model)")
-        }
-        
-        console.print("Select quality preset:")
-        for key, (preset, desc) in quality_options.items():
-            console.print(f"[bold cyan]{key}.[/bold cyan] {desc}")
-        
-        quality_choice = Prompt.ask("Enter option number", default="1")
-        quality_preset = quality_options.get(quality_choice, ("accurate", ""))[0]
+        # Set quality preset directly instead of asking user
+        quality_preset = "accurate"
         
         # Language selection
         language_options = {
@@ -469,6 +802,16 @@ def main():
         
         lang_choice = Prompt.ask("Enter option number", default="4")
         language = language_options.get(lang_choice, (None, ""))[0]
+        
+        # Update Urdu prompt for better language separation when Urdu is selected
+        if language == "ur":
+            LANGUAGE_PROMPTS["ur"] = """بسم اللہ الرحمٰن الرحیم۔ یہ اردو میں ٹرانسکرپشن ہے:
+
+اس آڈیو میں اردو اور عربی دونوں زبانیں ہو سکتی ہیں۔ براہ کرم:
+- اردو متن کو اردو میں لکھیں
+- عربی اقتباسات کو عربی میں لکھیں
+- دونوں زبانوں کے درمیان واضح فرق رکھیں
+- قرآنی آیات اور احادیث کو درست عربی میں لکھیں"""
         
         # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
