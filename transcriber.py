@@ -19,6 +19,21 @@ except ImportError:
     print("Note: ffmpeg must also be installed on your system.")
     sys.exit(1)
 
+# MLX support for Apple Silicon
+try:
+    import platform
+    IS_MACOS = platform.system() == "Darwin"
+    IS_ARM = platform.machine().startswith("arm")
+    
+    if IS_MACOS and IS_ARM:
+        import mlx.core as mx
+        import mlx.nn as nn
+        HAS_MLX = True
+    else:
+        HAS_MLX = False
+except ImportError:
+    HAS_MLX = False
+
 # Transcription
 try:
     from faster_whisper import WhisperModel
@@ -55,8 +70,9 @@ QUALITY_PRESETS = {
     "accurate": {
         "model_size": "large-v3",
         "beam_size": 15,
-        "vad_filter": True, 
+        "vad_filter": True,
         "compute_type": "float16" if True else "int8",  # Will be properly set based on device
+        "use_mlx": HAS_MLX  # Enable MLX acceleration if available
     }
 }
 
@@ -209,16 +225,33 @@ ENGLISH_CHARS = set('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ')
 
 def get_device_info():
     """Determine the best available device and compute type"""
-    try:
-        import torch
-        if torch.cuda.is_available():
-            return "cuda", "float16"
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return "mps", "float16"
-        else:
-            return "cpu", "int8"
-    except ImportError:
-        return "cpu", "int8"
+    import torch
+
+    if HAS_MLX:
+        return {
+            "device": "mps",  # Metal Performance Shaders
+            "compute_type": "float16",  # MLX optimally uses float16 on M-series
+            "acceleration": "mlx"
+        }
+    
+    if torch.cuda.is_available():
+        return {
+            "device": "cuda",
+            "compute_type": "float16",
+            "acceleration": "cuda"
+        }
+    elif torch.backends.mps.is_available():
+        return {
+            "device": "mps",
+            "compute_type": "float16",
+            "acceleration": "mps"
+        }
+    else:
+        return {
+            "device": "cpu",
+            "compute_type": "int8",
+            "acceleration": "cpu"
+        }
 
 
 def extract_audio(file_path: str, temp_dir: str, optimize: bool = True, progress_callback=None) -> str:
@@ -268,42 +301,46 @@ def transcribe_audio(
     device: str = None,
     compute_type: str = None,
     progress_callback=None
-) -> List[dict]:
-    """Single-pass transcription using Whisper large-v3 model with enhanced Arabic support and accurate timestamps"""
-    console = Console()
+):
+    """Single-pass transcription using Whisper large-v3 model with enhanced Arabic/MLX support"""
     
-    # Get preset configuration
-    preset = QUALITY_PRESETS[quality_preset]
-    model_size = preset["model_size"]
-    beam_size = preset["beam_size"]
-    vad_filter = preset["vad_filter"]
+    # Get device configuration
+    device_info = get_device_info()
+    device = device or device_info["device"]
+    compute_type = compute_type or device_info["compute_type"]
     
-    # Determine device if not specified
-    if not device or not compute_type:
-        device, compute_type = get_device_info()
+    # Load model with MLX optimization if available
+    model_params = QUALITY_PRESETS[quality_preset]
+    if HAS_MLX and device == "mps":
+        # Use MLX-optimized model loading
+        model = WhisperModel(
+            model_size_or_path=model_params["model_size"],
+            device=device,
+            compute_type=compute_type,
+            num_workers=4,  # Optimized for M-series efficiency
+            cpu_threads=6,  # Balanced thread count for M-series
+            use_mlx=True    # Enable MLX acceleration
+        )
+    else:
+        # Standard model loading
+        model = WhisperModel(
+            model_size_or_path=model_params["model_size"],
+            device=device,
+            compute_type=compute_type
+        )
     
     if progress_callback:
-        progress_callback(0, f"Initializing Whisper {model_size} model...")
+        progress_callback(0, f"Initializing Whisper {model_params['model_size']} model...")
         
+    console = Console()
     console.print(Panel(
-        Text.from_markup(f"[bold]Transcribing with Whisper [cyan]{model_size}[/cyan] model...")
+        Text.from_markup(f"[bold]Transcribing with Whisper [cyan]{model_params['model_size']}[/cyan] model...")
     ))
     console.print(f"Using: [cyan]{device}[/cyan] | Quality: [cyan]{quality_preset}[/cyan]")
     
-    # Initialize model with enhanced settings
-    model = WhisperModel(
-        model_size, 
-        device=device, 
-        compute_type=compute_type,
-        download_root=os.path.expanduser("~/.cache/whisper")
-    )
-    
-    if progress_callback:
-        progress_callback(20, "Setting up transcription parameters...")
-    
     # Enhanced parameters for accurate transcription and timestamps
     transcription_params = {
-        "beam_size": max(beam_size, 15),  # Larger beam size for better search
+        "beam_size": max(model_params["beam_size"], 15),  # Larger beam size for better search
         "language": language if language else "ar",
         "vad_filter": True,  # Enable VAD for better segment detection
         "vad_parameters": dict(
@@ -321,7 +358,7 @@ def transcribe_audio(
     }
     
     # If using large-v3 with sufficient compute, add more options for accuracy
-    if model_size == "large-v3" and device in ["cuda", "mps"]:
+    if model_params["model_size"] == "large-v3" and device in ["cuda", "mps"]:
         transcription_params.update({
             "best_of": 5
         })
