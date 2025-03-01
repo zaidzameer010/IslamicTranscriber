@@ -1,0 +1,25 @@
+Review and correct the provided SRT file text, focusing on proper spelling, grammar, and formatting for Islamic content in Arabic and English. Focus on:
+
+Maintaining accuracy of Islamic terms, names, and concepts in both languages
+
+Preserving diacritical marks in Arabic text (tashkeel/harakat)
+
+Correcting spelling, punctuation, and grammar while respecting language-specific rules
+
+Ensuring proper transliteration of Arabic/Islamic terms in English text
+
+Maintaining technical terminology if present
+
+Ensuring consistent formatting and directionality (RTL for Arabic, LTR for English)
+
+Preserving all SRT timestamp lines exactly as they appear
+
+Proper capitalization of Islamic terms and names in English text
+
+Language-specific guidelines:
+
+Arabic: Preserve all diacritical marks, ensure proper letter connections and native Arabic script
+
+English: Use standard Islamic English transliteration conventions
+
+Note: Leave all SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") completely untouched
