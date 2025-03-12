@@ -91,7 +91,7 @@ def apply_context_aware_corrections(text: str, language: str) -> str:
 
 class SRTGrammarCorrector:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY","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")
         if not self.api_key:
             raise ValueError("OpenRouter API key is required. Set OPENROUTER_API_KEY environment variable.")
         
@@ -209,7 +209,7 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
                         {"role": "user", "content": f"Please correct ONLY the subtitle text in the following blocks. DO NOT modify block numbers or any text that looks like timestamps:\n\n{subtitle_content}"}
                     ],
                     "stream": True,
-                    "temperature": 0.3,  # Lower temperature for more consistent corrections
+                    "temperature": 0.5,  # Lower temperature for more consistent corrections
                     "max_tokens": 507904   # Adjust based on your needs
                 },
                 timeout=None
