@@ -4,7 +4,7 @@ import httpx
 import asyncio
 import re
 from pathlib import Path
-from typing import List, Dict, Generator, Tuple
+from typing import List, Dict, Generator, Tuple, Optional
 from rich.console import Console
 from rich.prompt import Prompt
 from rich import print as rprint
@@ -91,7 +91,7 @@ def apply_context_aware_corrections(text: str, language: str) -> str:
 
 class SRTGrammarCorrector:
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY","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")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY","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")
         if not self.api_key:
             raise ValueError("OpenRouter API key is required. Set OPENROUTER_API_KEY environment variable.")
         
@@ -102,17 +102,22 @@ class SRTGrammarCorrector:
             "Content-Type": "application/json"
         }
         
-        # System prompt for the grammar correction
-        self.system_prompt = """Review and correct the provided SRT file text, focusing on proper spelling, grammar, and formatting for Islamic content in Arabic and English. Focus on:
+        # Enhanced system prompt for the grammar correction with emphasis on context
+        self.system_prompt = """You are an expert in Islamic content transcription correction. Your task is to review and correct the ENTIRE SRT file text as a cohesive document, focusing on proper spelling, grammar, and formatting for Islamic content in Arabic and English.
 
-Maintaining accuracy of Islamic terms, names, and concepts in both languages
-Preserving diacritical marks in Arabic text (tashkeel/harakat)
-Correcting spelling, punctuation, and grammar while respecting language-specific rules
-Ensuring proper transliteration of Arabic/Islamic terms in English text
-Maintaining technical terminology if present
-Ensuring consistent formatting and directionality (RTL for Arabic, LTR for English)
-Preserving all SRT timestamp lines exactly as they appear - DO NOT modify timestamp lines in any way
-Proper capitalization of Islamic terms and names in English text
+IMPORTANT: First read and understand the ENTIRE transcript to grasp the full context, topic, and terminology before making any corrections. Many blocks are part of the same sentence or thought that spans across multiple timestamps.
+
+Focus on:
+1. Maintaining accuracy of Islamic terms, names, and concepts in both languages
+2. Preserving diacritical marks in Arabic text (tashkeel/harakat)
+3. Correcting severely misspelled words, nonsensical punctuation, and grammar errors while respecting language-specific rules
+4. Ensuring proper transliteration of Arabic/Islamic terms in English text
+5. Maintaining technical terminology if present
+6. Ensuring consistent formatting and directionality (RTL for Arabic, LTR for English)
+7. Preserving all SRT timestamp lines exactly as they appear - DO NOT modify timestamp lines in any way
+8. Proper capitalization of Islamic terms and names in English text
+9. Maintaining consistency of terminology, names, and concepts across the entire transcript
+10. If you detect missing words that result in incomplete or fragmented sentences, insert the appropriate words to complete the sentence while preserving the intended meaning.
 
 Language-specific guidelines:
 Arabic: 
@@ -128,6 +133,8 @@ English:
 Mixed language content:
 - Apply the appropriate punctuation style based on the primary language of each sentence
 - For sentences with mixed languages, use punctuation that matches the dominant language
+
+CRITICAL: Understand that many blocks are part of continuous speech. A sentence may start in one block and continue in the next. Always check surrounding blocks for context before correcting.
 
 Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COMPLETELY UNTOUCHED"""
 
@@ -184,20 +191,84 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
             result.append(f"{block['index']}\n{block['timestamp']}\n{block['content']}\n")
         return "\n".join(result)
     
-    async def correct_grammar(self, text: str) -> Generator[str, None, None]:
-        """Send text to OpenRouter API for grammar correction with streaming response."""
-        # Parse SRT into blocks to preserve timestamps
-        srt_blocks = self.parse_srt_content(text)
+    def analyze_transcript_context(self, blocks: List[Dict]) -> Dict:
+        """Analyze the transcript to extract context information."""
+        # Extract all text content for language detection
+        all_text = " ".join([block['content'] for block in blocks])
+        primary_language = detect_language_context(all_text)
         
-        # Extract only the subtitle content for correction
+        # Extract potential topics and key terms
+        # This is a simple implementation - could be enhanced with NLP
+        words = re.findall(r'\b\w+\b', all_text.lower())
+        word_freq = {}
+        for word in words:
+            if len(word) > 3:  # Skip very short words
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Get top frequent words as potential key terms
+        key_terms = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        return {
+            "primary_language": primary_language,
+            "total_blocks": len(blocks),
+            "key_terms": [term for term, _ in key_terms],
+            "text_sample": all_text[:500]  # First 500 chars as sample
+        }
+    
+    def group_blocks_by_context(self, blocks: List[Dict], max_group_size: int = 10) -> List[List[Dict]]:
+        """Group blocks into contextual chunks for better processing."""
+        # This helps maintain context across blocks while keeping chunks manageable
+        grouped_blocks = []
+        current_group = []
+        
+        for i, block in enumerate(blocks):
+            current_group.append(block)
+            
+            # Start a new group when max size reached or at natural breaks in content
+            if (len(current_group) >= max_group_size or 
+                i == len(blocks) - 1 or  # Last block
+                (i > 0 and i < len(blocks) - 1 and 
+                 blocks[i]['content'].endswith(('.', '?', '!', '。', '؟', '！')) and
+                 not blocks[i+1]['content'][0].islower())):  # Natural sentence break
+                
+                grouped_blocks.append(current_group)
+                current_group = []
+        
+        # Add any remaining blocks
+        if current_group:
+            grouped_blocks.append(current_group)
+            
+        return grouped_blocks
+    
+    def prepare_context_for_api(self, blocks: List[Dict], transcript_context: Dict) -> str:
+        """Prepare the full context for the API with metadata."""
+        # Extract all subtitle content with block numbers
         subtitle_texts = []
-        for block in srt_blocks:
+        for block in blocks:
             subtitle_texts.append(f"BLOCK {block['index']}:\n{block['content']}")
         
-        # Join subtitle texts with clear separators for the API
+        # Join subtitle texts with clear separators
         subtitle_content = "\n\n---\n\n".join(subtitle_texts)
         
-        # Send only subtitle content to API
+        # Add context information
+        context_info = f"""
+TRANSCRIPT CONTEXT:
+Primary Language: {transcript_context['primary_language']}
+Total Blocks: {transcript_context['total_blocks']}
+Key Terms: {', '.join(transcript_context['key_terms'])}
+Content Sample: {transcript_context['text_sample']}
+
+FULL TRANSCRIPT CONTENT:
+{subtitle_content}
+"""
+        return context_info
+    
+    async def correct_grammar_with_context(self, blocks: List[Dict], transcript_context: Dict) -> Generator[str, None, None]:
+        """Send text to OpenRouter API for grammar correction with full context awareness."""
+        # Prepare the full context for the API
+        context_info = self.prepare_context_for_api(blocks, transcript_context)
+        
+        # Send to API with enhanced context
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 self.api_url,
@@ -206,10 +277,10 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
                     "model": "google/gemini-2.0-pro-exp-02-05:free",  # You can change the model as needed
                     "messages": [
                         {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": f"Please correct ONLY the subtitle text in the following blocks. DO NOT modify block numbers or any text that looks like timestamps:\n\n{subtitle_content}"}
+                        {"role": "user", "content": f"Please correct the subtitle text in the following transcript. First read and understand the ENTIRE transcript to grasp the full context before making corrections. Many blocks are part of continuous speech that spans multiple timestamps. DO NOT modify block numbers or timestamps:\n\n{context_info}"}
                     ],
                     "stream": True,
-                    "temperature": 0.5,  # Lower temperature for more consistent corrections
+                    "temperature": 0.2,  # Lower temperature for more consistent corrections
                     "max_tokens": 507904   # Adjust based on your needs
                 },
                 timeout=None
@@ -245,7 +316,7 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
         return original_blocks
     
     async def process_file(self, file_path: Path) -> None:
-        """Process a single SRT file."""
+        """Process a single SRT file with enhanced context awareness."""
         console.print(f"\n[bold blue]Processing file:[/bold blue] {file_path}")
         
         # Read the file
@@ -254,8 +325,21 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
         # Parse SRT content into blocks
         original_blocks = self.parse_srt_content(original_text)
         
+        if not original_blocks:
+            console.print("[bold red]No valid SRT blocks found in the file![/bold red]")
+            return
+            
+        # Analyze transcript for context
+        console.print("[bold green]Analyzing transcript context...[/bold green]")
+        transcript_context = self.analyze_transcript_context(original_blocks)
+        
+        # Display detected context
+        console.print(f"[bold]Detected primary language:[/bold] {transcript_context['primary_language']}")
+        console.print(f"[bold]Total blocks:[/bold] {transcript_context['total_blocks']}")
+        console.print(f"[bold]Key terms detected:[/bold] {', '.join(transcript_context['key_terms'])}")
+        
         # Process the text
-        console.print("[bold green]Correcting grammar and formatting while preserving timestamps...[/bold green]")
+        console.print("[bold green]Correcting grammar and formatting with full context awareness...[/bold green]")
         corrected_content = ""
         
         # Create a temporary file for streaming updates
@@ -268,7 +352,7 @@ Note: SRT timestamp lines (e.g. "00:00:20,000 --> 00:00:23,000") must remain COM
             
         try:
             # Collect all corrected content
-            async for chunk in self.correct_grammar(original_text):
+            async for chunk in self.correct_grammar_with_context(original_blocks, transcript_context):
                 corrected_content += chunk
                 console.print(chunk, end="", style="cyan")
             
