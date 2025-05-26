@@ -2,11 +2,12 @@
 faster-whisper
 rich
 pydub
-numpy>=1.24.0
+numpy
 librosa
 soundfile
 srt
 noisereduce
-spacy>=3.0.0
+spacy
 langid
-requests>=2.31.0
+requests
+git+https://github.com/TEN-framework/ten-vad.git

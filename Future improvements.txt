@@ -1,3 +1,0 @@
-create a beautiful interface for the user to upload the audio file and see the transcription results.
-add a sidepanel for output of the transcription results for editing or proofreading.
-add ai suggestions and editing for the transcription results.
