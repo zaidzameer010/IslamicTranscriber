@@ -1,16 +1,8 @@
-# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
 faster-whisper
 rich
 pydub
-numpy
 librosa
 soundfile
 srt
-noisereduce
-scipy
-spacy
-langid
 requests
 python-dotenv
-google-genai
-git+https://github.com/TEN-framework/ten-vad.git
