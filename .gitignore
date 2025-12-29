@@ -1,2 +1,5 @@
 *.srt
 .env
+*.txt
+*.mp3
+*.mp4

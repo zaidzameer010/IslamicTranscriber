@@ -6,3 +6,5 @@ soundfile
 srt
 requests
 python-dotenv
+silero-vad
+stable-ts
